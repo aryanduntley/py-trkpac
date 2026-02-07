@@ -12,6 +12,27 @@ from py_trkpac.db import Database
 from py_trkpac.utils import normalize_name, info, error
 
 
+SYSTEM_DIST_PACKAGES = Path("/usr/lib/python3/dist-packages")
+
+
+def check_system_package(name: str) -> tuple[str, str] | None:
+    """Check if a package is installed in system dist-packages.
+
+    Returns (name, version) if found, None otherwise.
+    """
+    norm = normalize_name(name)
+    if not SYSTEM_DIST_PACKAGES.is_dir():
+        return None
+    for child in SYSTEM_DIST_PACKAGES.iterdir():
+        if not (child.is_dir() and child.name.endswith(".dist-info")):
+            continue
+        dir_name = child.name[: -len(".dist-info")]
+        parts = dir_name.rsplit("-", 1)
+        if len(parts) == 2 and normalize_name(parts[0]) == norm:
+            return (parts[0], parts[1])
+    return None
+
+
 # -- .dist-info snapshot and diffing --
 
 def snapshot_dist_infos(target_path: Path) -> dict[str, str]:
@@ -242,8 +263,23 @@ def do_install(db: Database, packages: list[str], target_path: Path) -> bool:
             name_to_arg[normalize_name(pkg)] = pkg
 
     # Pre-flight checks
+    from py_trkpac.utils import confirm as _confirm
     to_install = []
     for norm, original_arg in name_to_arg.items():
+        # Check if package exists in system Python (e.g. managed by apt)
+        if norm not in local_packages:
+            sys_pkg = check_system_package(norm)
+            if sys_pkg:
+                sys_name, sys_ver = sys_pkg
+                info(
+                    f"Warning: {sys_name}=={sys_ver} is installed in system "
+                    f"Python ({SYSTEM_DIST_PACKAGES}). "
+                    f"Installing will shadow the system version."
+                )
+                if not _confirm(f"Proceed with installing {norm}?", default_yes=False):
+                    info(f"Skipping {norm}.")
+                    continue
+
         existing = db.get_package(norm)
         if existing:
             dependents = db.get_dependents(existing["id"])
@@ -379,19 +415,22 @@ def do_remove(db: Database, packages: list[str], target_path: Path) -> bool:
         db.remove_package(existing["name"])
         info(f"Removed {existing['display_name']}=={existing['version']} from database.")
 
-    # Orphan cleanup
-    orphans = db.get_orphaned_dependencies()
-    if orphans:
+    # Recursive orphan cleanup — peel off one layer at a time
+    while True:
+        orphans = db.get_orphaned_dependencies()
+        if not orphans:
+            break
         info("\nThe following packages are no longer needed by anything:")
         for o in orphans:
             info(f"  {o['display_name']}=={o['version']}")
-        if confirm("Remove them?"):
-            for o in orphans:
-                dist_info = find_dist_info(target_path, o["name"])
-                if dist_info:
-                    remove_package_files(target_path, dist_info.name)
-                db.remove_package(o["name"])
-                info(f"  Removed {o['display_name']}")
+        if not confirm("Remove them?"):
+            break
+        for o in orphans:
+            dist_info = find_dist_info(target_path, o["name"])
+            if dist_info:
+                remove_package_files(target_path, dist_info.name)
+            db.remove_package(o["name"])
+            info(f"  Removed {o['display_name']}")
 
     return True
 

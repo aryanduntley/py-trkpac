@@ -53,6 +53,7 @@ py-trkpac install requests httpx pytest
 ```
 
 - Checks the database for existing packages before installing
+- Warns if a package is already installed in system Python (`/usr/lib/python3/dist-packages/`) and asks before shadowing it
 - Prompts on version conflicts or when a package is already installed as a dependency
 - Runs pip with `--target` and `--upgrade`
 - Records all installed packages and auto-detected dependencies in the database
@@ -80,7 +81,7 @@ py-trkpac remove selenium
 
 - Warns if other packages depend on the one being removed
 - Cleans up files using pip's RECORD manifest
-- Prompts to remove orphaned dependencies that nothing else needs
+- Prompts to remove orphaned dependencies that nothing else needs, recursively through the full dependency tree
 
 ### List packages
 
