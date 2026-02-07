@@ -1,0 +1,5 @@
+[project]
+name = "py-trkpac"
+version = "0.1.0"
+description = "Global Python package manager with SQLite tracking"
+requires-python = ">=3.13"

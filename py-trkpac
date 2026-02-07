@@ -1,0 +1,15 @@
+#!/bin/bash
+# py-trkpac — global Python package manager
+# Usage: py-trkpac install numpy torch
+#        py-trkpac list
+#        py-trkpac --help
+
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+    DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+PYTHONPATH="${SCRIPT_DIR}/src${PYTHONPATH:+:$PYTHONPATH}" \
+exec python3 -m py_trkpac "$@"
