@@ -1,6 +1,6 @@
 # py-trkpac
 
-A global Python package manager that wraps pip with SQLite tracking. Install packages into a single shared directory, accessible from any terminal without activating a venv.
+A global Python package manager for linux that wraps pip with SQLite tracking. Install packages into a single shared directory, accessible from any terminal without activating a venv.
 
 ## Why
 
