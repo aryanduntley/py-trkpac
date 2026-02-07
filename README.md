@@ -19,20 +19,42 @@ You still use venvs for project-specific needs. py-trkpac handles the rest.
 
 ## Install
 
+Requires Python 3.13+. No external dependencies — uses only Python stdlib.
+
+### From PyPI
+
 ```bash
-# Clone the repo
-git clone https://github.com/yourusername/py-trkpac.git ~/Desktop/Projects/py-trkpac
-
-# Create a symlink (no pip install needed)
-ln -s ~/Desktop/Projects/py-trkpac/py-trkpac ~/.local/bin/py-trkpac
-
-# Initialize — sets target directory, creates DB, updates .bashrc
+pip install py-trkpac
 py-trkpac init
 ```
 
-No external dependencies. Uses only Python stdlib (sqlite3, subprocess, argparse, pathlib, importlib.metadata).
+### From PyPI (venv bootstrap)
 
-Requires Python 3.13+.
+On systems with PEP 668 (`externally-managed-environment`), use a temporary venv to bootstrap py-trkpac into its own managed directory:
+
+```bash
+# Create a temporary venv and install py-trkpac
+python3 -m venv /tmp/trkpac-bootstrap
+/tmp/trkpac-bootstrap/bin/pip install py-trkpac
+
+# Initialize (sets up target directory, DB, and shell config)
+/tmp/trkpac-bootstrap/bin/py-trkpac init
+
+# Install py-trkpac into its own managed directory
+/tmp/trkpac-bootstrap/bin/py-trkpac install py-trkpac
+
+# Open a new terminal — py-trkpac is now on your PATH via the managed directory
+# You can safely remove the bootstrap venv
+rm -rf /tmp/trkpac-bootstrap
+```
+
+### From source (development)
+
+```bash
+git clone https://github.com/aryanduntley/py-trkpac.git
+ln -s /path/to/py-trkpac/py-trkpac ~/.local/bin/py-trkpac
+py-trkpac init
+```
 
 ## Usage
 
