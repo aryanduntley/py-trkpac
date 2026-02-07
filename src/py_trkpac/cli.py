@@ -101,15 +101,28 @@ def cmd_list(args: argparse.Namespace) -> int:
 
     rows = []
     for p in packages:
-        kind = "explicit" if p["is_explicit"] else "dependency"
+        if p["is_local"]:
+            kind = "local"
+        elif p["is_explicit"]:
+            kind = "explicit"
+        else:
+            kind = "dependency"
         date = p["install_date"][:10] if p["install_date"] else ""
         rows.append([p["display_name"], p["version"], kind, date])
 
     print_table(["Package", "Version", "Type", "Installed"], rows)
 
-    explicit_count = sum(1 for p in packages if p["is_explicit"])
-    dep_count = len(packages) - explicit_count
-    info(f"\n{len(packages)} package(s): {explicit_count} explicit, {dep_count} dependencies")
+    local_count = sum(1 for p in packages if p["is_local"])
+    explicit_count = sum(1 for p in packages if p["is_explicit"] and not p["is_local"])
+    dep_count = len(packages) - explicit_count - local_count
+    parts = []
+    if explicit_count:
+        parts.append(f"{explicit_count} explicit")
+    if local_count:
+        parts.append(f"{local_count} local")
+    if dep_count:
+        parts.append(f"{dep_count} dependencies")
+    info(f"\n{len(packages)} package(s): {', '.join(parts)}")
 
     db.close()
     return 0
@@ -126,7 +139,11 @@ def cmd_list_deps(args: argparse.Namespace) -> int:
 
     # Direct dependencies
     deps = db.get_dependencies(pkg["id"])
-    info(f"\n{pkg['display_name']}=={pkg['version']} depends on:")
+    header = f"\n{pkg['display_name']}=={pkg['version']}"
+    if pkg["is_local"]:
+        header += f" (local: {pkg['source_path']})"
+    header += " depends on:"
+    info(header)
     if deps:
         for d in deps:
             info(f"  {d['display_name']}=={d['version']}")

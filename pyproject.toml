@@ -1,5 +1,36 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "py-trkpac"
 version = "0.1.0"
 description = "Global Python package manager with SQLite tracking"
+readme = "README.md"
+license = "MIT"
 requires-python = ">=3.13"
+authors = [
+    { name = "Aryan Duntley" },
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development",
+    "Topic :: System :: Installation/Setup",
+]
+keywords = ["pip", "package-manager", "global", "sqlite"]
+
+[project.urls]
+Homepage = "https://github.com/aryanduntley/py-trkpac"
+Repository = "https://github.com/aryanduntley/py-trkpac"
+Issues = "https://github.com/aryanduntley/py-trkpac/issues"
+
+[project.scripts]
+py-trkpac = "py_trkpac.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

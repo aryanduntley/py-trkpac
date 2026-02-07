@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS packages (
     display_name TEXT NOT NULL,
     version      TEXT NOT NULL,
     is_explicit  INTEGER NOT NULL DEFAULT 0,
+    is_local     INTEGER NOT NULL DEFAULT 0,
+    source_path  TEXT,
     install_date TEXT NOT NULL,
     updated_date TEXT
 );
@@ -42,6 +44,20 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    """Apply schema migrations for new columns. Idempotent."""
+    migrations = [
+        "ALTER TABLE packages ADD COLUMN is_local INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE packages ADD COLUMN source_path TEXT",
+    ]
+    for sql in migrations:
+        try:
+            conn.execute(sql)
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+    conn.commit()
+
+
 class Database:
     """Wrapper around the py-trkpac SQLite database."""
 
@@ -50,6 +66,7 @@ class Database:
         self.conn = sqlite3.connect(str(db_path))
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.row_factory = sqlite3.Row
+        _migrate_schema(self.conn)
 
     def close(self) -> None:
         self.conn.close()
@@ -99,30 +116,40 @@ class Database:
         display_name: str,
         version: str,
         is_explicit: bool,
+        is_local: bool = False,
+        source_path: str | None = None,
     ) -> int:
         """Insert or update a package. Returns the package id.
 
         If the package already exists:
         - version and updated_date are refreshed
         - is_explicit is promoted to 1 if requested, but never demoted
+        - is_local is promoted to 1 if requested, but never demoted
+        - source_path is updated when is_local is True
         """
         norm = normalize_name(name)
         existing = self.get_package(norm)
         if existing:
-            # Never demote is_explicit from 1 to 0
+            # Never demote is_explicit or is_local from 1 to 0
             new_explicit = 1 if (existing["is_explicit"] or is_explicit) else 0
+            new_local = 1 if (existing["is_local"] or is_local) else 0
+            new_source = source_path if is_local else existing["source_path"]
             self.conn.execute(
                 "UPDATE packages SET version = ?, display_name = ?, "
-                "is_explicit = ?, updated_date = ? WHERE id = ?",
-                (version, display_name, new_explicit, _now(), existing["id"]),
+                "is_explicit = ?, is_local = ?, source_path = ?, "
+                "updated_date = ? WHERE id = ?",
+                (version, display_name, new_explicit, new_local, new_source,
+                 _now(), existing["id"]),
             )
             self.conn.commit()
             return existing["id"]
         else:
             cur = self.conn.execute(
-                "INSERT INTO packages (name, display_name, version, is_explicit, install_date) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (norm, display_name, version, int(is_explicit), _now()),
+                "INSERT INTO packages (name, display_name, version, is_explicit, "
+                "is_local, source_path, install_date) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (norm, display_name, version, int(is_explicit),
+                 int(is_local), source_path, _now()),
             )
             self.conn.commit()
             return cur.lastrowid

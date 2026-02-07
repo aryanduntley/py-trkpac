@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 from py_trkpac.db import Database
@@ -80,6 +81,56 @@ def parse_dependency_name(requires_dist_entry: str) -> str | None:
     if match:
         return normalize_name(match.group(1))
     return None
+
+
+# -- pyproject.toml parsing for local installs --
+
+def parse_pyproject_name(project_path: Path) -> tuple[str, str] | None:
+    """Read pyproject.toml and return (name, version), or None if unparseable."""
+    toml_path = project_path / "pyproject.toml"
+    if not toml_path.exists():
+        return None
+    try:
+        with open(toml_path, "rb") as f:
+            data = tomllib.load(f)
+        project = data.get("project", {})
+        name = project.get("name")
+        version = project.get("version", "0.0.0")
+        if not name:
+            return None
+        return (name, version)
+    except (tomllib.TOMLDecodeError, KeyError):
+        return None
+
+
+def resolve_local_packages(packages: list[str]) -> tuple[list[str], dict[str, str]]:
+    """Separate package args into pip args and a local-packages mapping.
+
+    Returns:
+        pip_args: list of args to pass to pip (local paths kept as-is, PyPI names kept as-is)
+        local_packages: dict of {normalized_name: resolved_path_str} for local installs
+    """
+    local_packages: dict[str, str] = {}  # norm_name -> resolved_path
+    pip_args: list[str] = []
+
+    for pkg in packages:
+        resolved = Path(pkg).expanduser().resolve()
+        if resolved.is_dir() and (
+            (resolved / "pyproject.toml").exists() or (resolved / "setup.py").exists()
+        ):
+            meta = parse_pyproject_name(resolved)
+            if meta:
+                norm = normalize_name(meta[0])
+                local_packages[norm] = str(resolved)
+                pip_args.append(str(resolved))
+            else:
+                # Can't determine name — still pass to pip, just won't be tracked as local
+                error(f"Could not parse package name from {resolved}/pyproject.toml")
+                pip_args.append(str(resolved))
+        else:
+            pip_args.append(pkg)
+
+    return pip_args, local_packages
 
 
 # -- RECORD parsing for removal --
@@ -173,10 +224,26 @@ def pip_install(packages: list[str], target_path: Path) -> subprocess.CompletedP
 
 def do_install(db: Database, packages: list[str], target_path: Path) -> bool:
     """Run the full install flow. Returns True on success."""
+    # Resolve local paths: separate into pip args and local-package mapping
+    pip_args, local_packages = resolve_local_packages(packages)
+
+    # Build a name->original_arg mapping for pre-flight lookups
+    # For local packages, use the resolved name; for PyPI, use the arg as-is
+    name_to_arg: dict[str, str] = {}
+    for pkg in pip_args:
+        resolved = Path(pkg).expanduser().resolve()
+        if str(resolved) in local_packages.values():
+            # Find the norm name for this path
+            for norm, path in local_packages.items():
+                if path == str(resolved):
+                    name_to_arg[norm] = pkg
+                    break
+        else:
+            name_to_arg[normalize_name(pkg)] = pkg
+
     # Pre-flight checks
     to_install = []
-    for pkg in packages:
-        norm = normalize_name(pkg)
+    for norm, original_arg in name_to_arg.items():
         existing = db.get_package(norm)
         if existing:
             dependents = db.get_dependents(existing["id"])
@@ -208,7 +275,7 @@ def do_install(db: Database, packages: list[str], target_path: Path) -> bool:
                     return False
                 if choice == "Keep as dependency":
                     continue
-        to_install.append(pkg)
+        to_install.append(original_arg)
 
     if not to_install:
         info("Nothing to install.")
@@ -232,8 +299,8 @@ def do_install(db: Database, packages: list[str], target_path: Path) -> bool:
         return True
 
     # Record all new/changed packages in DB
-    requested_names = {normalize_name(p) for p in packages}
-    installed_packages = {}  # norm_name -> package_id
+    requested_names = set(name_to_arg.keys())
+    installed_packages = {}  # norm_name -> (package_id, meta)
 
     for dist_info_name in changed:
         dist_path = target_path / dist_info_name
@@ -243,11 +310,15 @@ def do_install(db: Database, packages: list[str], target_path: Path) -> bool:
 
         norm = normalize_name(meta["name"])
         is_explicit = norm in requested_names
+        is_local = norm in local_packages
+        source_path = local_packages.get(norm)
         pkg_id = db.upsert_package(
             name=meta["name"],
             display_name=meta["name"],
             version=meta["version"],
             is_explicit=is_explicit,
+            is_local=is_local,
+            source_path=source_path,
         )
         installed_packages[norm] = (pkg_id, meta)
 
@@ -268,8 +339,10 @@ def do_install(db: Database, packages: list[str], target_path: Path) -> bool:
     for dist_info_name in sorted(changed):
         dist_path = target_path / dist_info_name
         meta = parse_metadata(dist_path)
-        marker = "*" if normalize_name(meta["name"] or "") in requested_names else " "
-        info(f"  {marker} {meta['name']}=={meta['version']}")
+        norm = normalize_name(meta["name"] or "")
+        marker = "*" if norm in requested_names else " "
+        local_marker = " (local)" if norm in local_packages else ""
+        info(f"  {marker} {meta['name']}=={meta['version']}{local_marker}")
     info("(* = explicitly requested)")
 
     return True
@@ -332,9 +405,17 @@ def do_update(db: Database, packages: list[str] | None, target_path: Path) -> bo
             if not existing:
                 error(f"{pkg} is not installed.")
                 continue
+            if existing["is_local"]:
+                info(
+                    f"{existing['display_name']} is a local install. "
+                    f"Reinstall from source path: py-trkpac install {existing['source_path']}"
+                )
+                continue
             to_update.append(existing["display_name"])
     else:
         explicit = db.get_explicit_packages()
+        # Skip local packages — they need explicit reinstall from source path
+        explicit = [p for p in explicit if not p["is_local"]]
         if not explicit:
             info("No explicit packages to update.")
             return True

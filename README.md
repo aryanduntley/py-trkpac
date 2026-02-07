@@ -58,6 +58,20 @@ py-trkpac install requests httpx pytest
 - Records all installed packages and auto-detected dependencies in the database
 - Only updates the database after pip reports success
 
+### Install local projects
+
+```bash
+py-trkpac install /path/to/downloaded-project
+py-trkpac install ~/Desktop/Projects/my-mcp-server
+```
+
+- Detects local directories with `pyproject.toml` or `setup.py`
+- Installs via pip into the same target directory as PyPI packages
+- Parses `pyproject.toml` to identify the package name and track it in the database
+- Tracks the source path so you know where each local package came from
+- Shows as "local" type in `py-trkpac list`
+- To update after source changes, just re-run the install command
+
 ### Remove packages
 
 ```bash
@@ -77,13 +91,14 @@ py-trkpac list
 ```
 Package          Version      Type        Installed
 ---------------  -----------  ----------  ----------
+aifp             0.1.0        local       2026-02-07
 click            8.3.1        explicit    2026-02-07
 cryptography     46.0.4       explicit    2026-02-07
 certifi          2026.1.4     dependency  2026-02-07
 cffi             2.0.0        dependency  2026-02-07
 ...
 
-62 package(s): 17 explicit, 45 dependencies
+63 package(s): 17 explicit, 1 local, 45 dependencies
 ```
 
 ### List dependencies
