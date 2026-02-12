@@ -4,8 +4,8 @@
 name: Upload Python Package
 
 on:
-  release:
-    types: [published]
+  push:
+    tags: ["v*"]
 
 permissions:
   contents: read
@@ -41,7 +41,7 @@ jobs:
 
     environment:
       name: release
-      url: https://pypi.org/project/py-trkpac/${{ github.event.release.name }}
+      url: https://pypi.org/project/py-trkpac/${{ github.ref_name }}
 
     steps:
       - name: Retrieve release distributions
