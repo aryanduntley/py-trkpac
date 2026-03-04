@@ -227,6 +227,47 @@ def find_dist_info(target_path: Path, package_name: str) -> Path | None:
     return None
 
 
+def clean_stale_dist_infos(target_path: Path, current_dist_infos: list[str]) -> int:
+    """Remove old .dist-info dirs for packages that have a newer version.
+
+    Args:
+        target_path: The target install directory.
+        current_dist_infos: List of .dist-info dir names that are current (just installed/updated).
+
+    Returns:
+        Number of stale directories removed.
+    """
+    import shutil
+
+    # Build a map of package name -> current dist-info dir name
+    current_by_name: dict[str, str] = {}
+    for di_name in current_dist_infos:
+        base = di_name[: -len(".dist-info")] if di_name.endswith(".dist-info") else di_name
+        parts = base.rsplit("-", 1)
+        if parts:
+            current_by_name[normalize_name(parts[0])] = di_name
+
+    removed = 0
+    if not target_path.is_dir():
+        return removed
+
+    for child in list(target_path.iterdir()):
+        if not (child.is_dir() and child.name.endswith(".dist-info")):
+            continue
+        base = child.name[: -len(".dist-info")]
+        parts = base.rsplit("-", 1)
+        if not parts:
+            continue
+        norm = normalize_name(parts[0])
+        # If this package has a current dist-info and this isn't it, it's stale
+        if norm in current_by_name and child.name != current_by_name[norm]:
+            info(f"Removing stale {child.name}")
+            shutil.rmtree(child)
+            removed += 1
+
+    return removed
+
+
 # -- pip operations --
 
 def pip_install(packages: list[str], target_path: Path) -> subprocess.CompletedProcess:
@@ -333,6 +374,11 @@ def do_install(db: Database, packages: list[str], target_path: Path) -> bool:
     if not changed:
         info("No packages changed on disk.")
         return True
+
+    # Clean up stale .dist-info dirs left behind by pip --upgrade
+    stale = clean_stale_dist_infos(target_path, changed)
+    if stale:
+        info(f"Cleaned {stale} stale .dist-info director{'y' if stale == 1 else 'ies'}.")
 
     # Record all new/changed packages in DB
     requested_names = set(name_to_arg.keys())

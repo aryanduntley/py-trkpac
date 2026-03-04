@@ -124,16 +124,17 @@ class Database:
         If the package already exists:
         - version and updated_date are refreshed
         - is_explicit is promoted to 1 if requested, but never demoted
-        - is_local is promoted to 1 if requested, but never demoted
-        - source_path is updated when is_local is True
+        - is_local and source_path follow the current install type
+          (cleared when installing from PyPI, set when installing from local path)
         """
         norm = normalize_name(name)
         existing = self.get_package(norm)
         if existing:
-            # Never demote is_explicit or is_local from 1 to 0
+            # Never demote is_explicit from 1 to 0
             new_explicit = 1 if (existing["is_explicit"] or is_explicit) else 0
-            new_local = 1 if (existing["is_local"] or is_local) else 0
-            new_source = source_path if is_local else existing["source_path"]
+            # is_local follows the current install type (local path vs PyPI name)
+            new_local = 1 if is_local else 0
+            new_source = source_path if is_local else None
             self.conn.execute(
                 "UPDATE packages SET version = ?, display_name = ?, "
                 "is_explicit = ?, is_local = ?, source_path = ?, "
