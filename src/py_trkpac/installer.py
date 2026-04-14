@@ -284,8 +284,18 @@ def pip_install(packages: list[str], target_path: Path) -> subprocess.CompletedP
 
 # -- High-level install orchestration --
 
-def do_install(db: Database, packages: list[str], target_path: Path) -> bool:
-    """Run the full install flow. Returns True on success."""
+def do_install(
+    db: Database,
+    packages: list[str],
+    target_path: Path,
+    _from_update: bool = False,
+) -> bool:
+    """Run the full install flow. Returns True on success.
+
+    _from_update: when True, skip per-package "already installed" prompts and
+    the final proceed confirmation — the caller (do_update) has already
+    confirmed the operation as a whole.
+    """
     # Resolve local paths: separate into pip args and local-package mapping
     pip_args, local_packages = resolve_local_packages(packages)
 
@@ -308,7 +318,7 @@ def do_install(db: Database, packages: list[str], target_path: Path) -> bool:
     to_install = []
     for norm, original_arg in name_to_arg.items():
         # Check if package exists in system Python (e.g. managed by apt)
-        if norm not in local_packages:
+        if not _from_update and norm not in local_packages:
             sys_pkg = check_system_package(norm)
             if sys_pkg:
                 sys_name, sys_ver = sys_pkg
@@ -322,7 +332,7 @@ def do_install(db: Database, packages: list[str], target_path: Path) -> bool:
                     continue
 
         existing = db.get_package(norm)
-        if existing:
+        if existing and not _from_update:
             dependents = db.get_dependents(existing["id"])
             if existing["is_explicit"]:
                 info(f"{existing['display_name']}=={existing['version']} is already installed.")
@@ -357,6 +367,23 @@ def do_install(db: Database, packages: list[str], target_path: Path) -> bool:
     if not to_install:
         info("Nothing to install.")
         return True
+
+    # Final safety check: show exactly what will be passed to pip.
+    if not _from_update:
+        info("\nWill install:")
+        for arg in to_install:
+            local_name = None
+            for n, p in local_packages.items():
+                if p == arg:
+                    local_name = n
+                    break
+            if local_name:
+                info(f"  {local_name} (local: {arg})")
+            else:
+                info(f"  {arg}")
+        if not _confirm("Proceed?"):
+            info("Cancelled.")
+            return True
 
     # Snapshot before
     before = snapshot_dist_infos(target_path)
@@ -434,26 +461,42 @@ def do_remove(db: Database, packages: list[str], target_path: Path) -> bool:
     """Run the full remove flow. Returns True on success."""
     from py_trkpac.utils import confirm
 
-    # Track deps of packages we actually remove, so orphan cleanup only
-    # considers packages that were linked to what was removed — not
-    # pre-existing orphans from prior installs.
-    candidates_to_check: set[str] = set()
-
+    # Resolve targets up front so we can show a full summary before touching
+    # anything on disk or in the database. Each entry is (package_row, dependents_rows).
+    targets = []
     for pkg in packages:
         existing = db.get_package(pkg)
         if not existing:
             error(f"{pkg} is not installed.")
             continue
-
-        # Check dependents
         dependents = db.get_dependents(existing["id"])
-        if dependents:
-            dep_names = ", ".join(d["display_name"] for d in dependents)
-            info(f"{existing['display_name']} is required by: {dep_names}")
-            if not confirm(f"Remove {existing['display_name']} anyway?", default_yes=False):
-                info(f"Skipping {existing['display_name']}.")
-                continue
+        targets.append((existing, dependents))
 
+    if not targets:
+        return True
+
+    # Summary + single upfront confirmation.
+    info("\nWill remove:")
+    any_with_dependents = False
+    for existing, dependents in targets:
+        line = f"  {existing['display_name']}=={existing['version']}"
+        if dependents:
+            any_with_dependents = True
+            dep_names = ", ".join(d["display_name"] for d in dependents)
+            line += f"  (required by: {dep_names})"
+        info(line)
+
+    default_yes = not any_with_dependents
+    if not confirm("Proceed?", default_yes=default_yes):
+        info("Cancelled.")
+        return True
+
+    # Track deps of packages we actually remove, so orphan cleanup only
+    # considers packages that were linked to what was removed — not
+    # pre-existing orphans from prior installs.
+    candidates_to_check: set[str] = set()
+
+    for existing, _dependents in targets:
         # Capture direct deps as orphan candidates BEFORE removal (CASCADE
         # would otherwise wipe package_dependencies rows).
         for dep in db.get_dependencies(existing["id"]):
@@ -512,6 +555,8 @@ def do_remove(db: Database, packages: list[str], target_path: Path) -> bool:
 
 def do_update(db: Database, packages: list[str] | None, target_path: Path) -> bool:
     """Update packages. If packages is None/empty, update all explicit packages."""
+    from py_trkpac.utils import confirm
+
     if packages:
         to_update = []
         for pkg in packages:
@@ -534,10 +579,22 @@ def do_update(db: Database, packages: list[str] | None, target_path: Path) -> bo
             info("No explicit packages to update.")
             return True
         to_update = [p["display_name"] for p in explicit]
-        info(f"Updating {len(to_update)} explicit package(s)...")
 
     if not to_update:
         return True
 
-    # Use the same install flow — pip --upgrade handles version checking
-    return do_install(db, to_update, target_path)
+    # Summary + single upfront confirmation.
+    info(f"\nWill update {len(to_update)} package(s):")
+    for name in to_update:
+        pkg = db.get_package(name)
+        if pkg:
+            info(f"  {pkg['display_name']}=={pkg['version']}")
+        else:
+            info(f"  {name}")
+    if not confirm("Proceed?"):
+        info("Cancelled.")
+        return True
+
+    # Delegate to do_install with _from_update flag so it skips its own
+    # per-package prompts and final proceed confirm.
+    return do_install(db, to_update, target_path, _from_update=True)

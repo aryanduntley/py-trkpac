@@ -26,6 +26,19 @@ def cmd_init(args: argparse.Namespace) -> int:
         info("Use --force to reinitialize.")
         return 0
 
+    # When --force is used with an existing DB, surface the current state
+    # so the user knows exactly what they're re-initializing over.
+    existing_target = None
+    existing_pkg_count = 0
+    if existing and args.force:
+        try:
+            old_db = open_db(existing)
+            existing_target = old_db.get_config("target_path")
+            existing_pkg_count = len(old_db.get_all_packages())
+            old_db.close()
+        except Exception:
+            pass
+
     # Get target path
     if args.target:
         target_path = Path(args.target).expanduser().resolve()
@@ -39,10 +52,27 @@ def cmd_init(args: argparse.Namespace) -> int:
     # Get shell config path
     shell_config = Path(args.shell_config) if args.shell_config else default_shell
 
-    info(f"Target directory: {target_path}")
-    info(f"Shell config:     {shell_config}")
+    if existing and args.force:
+        info(f"\nExisting py-trkpac installation:")
+        info(f"  database:         {existing}")
+        if existing_target:
+            info(f"  current target:   {existing_target}")
+        info(f"  tracked packages: {existing_pkg_count}")
+        info(f"\nReinitializing will:")
+        info(f"  * create/replace the DB at: {target_path}/.py-trkpac.db")
+        info(f"  * rewrite the managed block in: {shell_config}")
+        if existing_target and str(Path(existing_target).resolve()) != str(target_path):
+            info(
+                f"  * leave the old target directory stranded "
+                f"(py-trkpac will no longer see its packages):\n"
+                f"      {existing_target}"
+            )
+    else:
+        info(f"Target directory: {target_path}")
+        info(f"Shell config:     {shell_config}")
 
-    if not confirm("Proceed?"):
+    default_yes = not (existing and args.force)
+    if not confirm("Proceed?", default_yes=default_yes):
         info("Cancelled.")
         return 0
 
@@ -180,6 +210,43 @@ def cmd_config(args: argparse.Namespace) -> int:
 
     if args.action == "set" and args.key and args.value:
         old_value = db.get_config(args.key)
+
+        # target_path changes are high-impact: packages in the old directory
+        # become invisible to py-trkpac and the shell config is rewritten.
+        if args.key == "target_path":
+            new_target = Path(args.value).expanduser().resolve()
+            old_resolved = Path(old_value).resolve() if old_value else None
+            pkg_count = len(db.get_all_packages())
+
+            info(f"\nChanging target_path:")
+            info(f"  old: {old_value}")
+            info(f"  new: {new_target}")
+            if old_resolved and old_resolved != new_target:
+                info(
+                    f"\nWarning: {pkg_count} tracked package(s) live under the "
+                    f"old target. They will NOT be moved."
+                )
+                info(
+                    f"  * the existing database ({old_value}/.py-trkpac.db) "
+                    f"stays where it is"
+                )
+                info(
+                    f"  * py-trkpac will point at the new target and see zero "
+                    f"packages until you install into it"
+                )
+                info(
+                    f"  * your shell config ({db.get_config('shell_config')}) "
+                    f"will be rewritten to the new PATH/PYTHONPATH"
+                )
+                info(
+                    f"  * to recover the old packages you must either switch "
+                    f"back or move the directory contents manually"
+                )
+            if not confirm("Proceed?", default_yes=False):
+                info("Cancelled.")
+                db.close()
+                return 0
+
         db.set_config(args.key, args.value)
         info(f"Config '{args.key}' updated: {old_value} -> {args.value}")
 
@@ -259,7 +326,14 @@ def main() -> None:
 
     handler = dispatch.get(args.command)
     if handler:
-        sys.exit(handler(args))
+        try:
+            sys.exit(handler(args))
+        except KeyboardInterrupt:
+            info("\nAborted.")
+            sys.exit(130)
+        except EOFError:
+            info("\nAborted.")
+            sys.exit(130)
     else:
         parser.print_help()
         sys.exit(1)
