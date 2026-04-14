@@ -434,6 +434,11 @@ def do_remove(db: Database, packages: list[str], target_path: Path) -> bool:
     """Run the full remove flow. Returns True on success."""
     from py_trkpac.utils import confirm
 
+    # Track deps of packages we actually remove, so orphan cleanup only
+    # considers packages that were linked to what was removed — not
+    # pre-existing orphans from prior installs.
+    candidates_to_check: set[str] = set()
+
     for pkg in packages:
         existing = db.get_package(pkg)
         if not existing:
@@ -449,6 +454,11 @@ def do_remove(db: Database, packages: list[str], target_path: Path) -> bool:
                 info(f"Skipping {existing['display_name']}.")
                 continue
 
+        # Capture direct deps as orphan candidates BEFORE removal (CASCADE
+        # would otherwise wipe package_dependencies rows).
+        for dep in db.get_dependencies(existing["id"]):
+            candidates_to_check.add(dep["name"])
+
         # Find and remove files
         dist_info = find_dist_info(target_path, existing["name"])
         if dist_info:
@@ -461,17 +471,36 @@ def do_remove(db: Database, packages: list[str], target_path: Path) -> bool:
         db.remove_package(existing["name"])
         info(f"Removed {existing['display_name']}=={existing['version']} from database.")
 
-    # Recursive orphan cleanup — peel off one layer at a time
+    # Recursive orphan cleanup — only consider deps of packages we removed,
+    # and only those that now have zero remaining dependents.
     while True:
-        orphans = db.get_orphaned_dependencies()
-        if not orphans:
+        newly_orphaned = []
+        for name in list(candidates_to_check):
+            pkg = db.get_package(name)
+            if not pkg:
+                candidates_to_check.discard(name)
+                continue
+            if pkg["is_explicit"]:
+                candidates_to_check.discard(name)
+                continue
+            if not db.get_dependents(pkg["id"]):
+                newly_orphaned.append(pkg)
+
+        if not newly_orphaned:
             break
-        info("\nThe following packages are no longer needed by anything:")
-        for o in orphans:
+
+        info("\nThe following dependencies are no longer needed by anything that remains:")
+        for o in newly_orphaned:
             info(f"  {o['display_name']}=={o['version']}")
         if not confirm("Remove them?"):
             break
-        for o in orphans:
+
+        for o in newly_orphaned:
+            candidates_to_check.discard(o["name"])
+            # Its deps become new candidates for the next pass.
+            for dep in db.get_dependencies(o["id"]):
+                candidates_to_check.add(dep["name"])
+
             dist_info = find_dist_info(target_path, o["name"])
             if dist_info:
                 remove_package_files(target_path, dist_info.name)
