@@ -89,24 +89,33 @@ def cmd_init(args: argparse.Namespace) -> int:
 
     # Install the resilient launcher. pip's generated console-script pins a
     # hard `#!/usr/bin/python3.X` shebang that dangles when the OS upgrades
-    # Python; this launcher delegates to whatever python3 is current.
+    # Python; this launcher delegates to whatever python3 is current and
+    # points PYTHONPATH at wherever py-trkpac actually lives right now (a
+    # standalone dir, the managed dir, or a source checkout) so it does not
+    # clobber an existing standalone install.
     if not args.no_launcher:
-        launcher_path, status = write_launcher(str(target_path))
+        import py_trkpac
+        import_root = Path(py_trkpac.__file__).resolve().parent.parent
+        launcher_path, status = write_launcher(str(import_root))
         if status == "unchanged":
             info(f"Launcher already current: {launcher_path}")
         elif status == "replaced":
             info(
                 f"Replaced launcher at {launcher_path} "
                 f"(backup: {launcher_path}.py-trkpac-backup) — "
-                f"now Python-upgrade resilient."
+                f"now Python-upgrade resilient (loads from {import_root})."
             )
         else:
-            info(f"Installed Python-upgrade-resilient launcher: {launcher_path}")
-        info(
-            "Note: ensure py-trkpac is installed into the managed directory "
-            "(`py-trkpac install py-trkpac`) so the launcher keeps working "
-            "across Python upgrades."
-        )
+            info(
+                f"Installed Python-upgrade-resilient launcher: "
+                f"{launcher_path} (loads from {import_root})"
+            )
+        if import_root.match("*/lib/python3.*/site-packages"):
+            info(
+                "Note: py-trkpac is in a version-pinned site-packages dir. "
+                "For upgrade resilience, install it standalone (install.sh) "
+                "or into the managed dir (`py-trkpac install py-trkpac`)."
+            )
 
     db.close()
     info("\npy-trkpac initialized. Open a new terminal for PATH changes to take effect.")

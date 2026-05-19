@@ -99,17 +99,19 @@ def remove_from_shell(config_path: Path) -> bool:
 LAUNCHER_MARKER = "# py-trkpac launcher (managed)"
 
 
-def _build_launcher(target_path: str) -> str:
+def _build_launcher(import_root: str) -> str:
     """Build the version-independent CLI launcher script.
 
     Unlike pip's generated console-script (a hard ``#!/usr/bin/python3.X``
     stub that dangles when the OS replaces the interpreter), this delegates
-    to whatever ``python3`` is current and points PYTHONPATH at the managed
-    target directory. py-trkpac is stdlib-only, so as long as it is
-    installed into the target dir it keeps importing across Python
-    upgrades with no reinstall.
+    to whatever ``python3`` is current and points PYTHONPATH at the
+    directory py-trkpac actually lives in (``import_root`` is the parent of
+    the ``py_trkpac`` package — e.g. a standalone ``~/.local/share``
+    location, the managed dir, or a source checkout's ``src/``). py-trkpac
+    is stdlib-only, so it keeps importing across Python upgrades with no
+    reinstall regardless of which model is used.
     """
-    path_expr = _home_relative(target_path)
+    path_expr = _home_relative(import_root)
     return (
         "#!/usr/bin/env bash\n"
         f"{LAUNCHER_MARKER} — interpreter-version independent.\n"
@@ -119,8 +121,12 @@ def _build_launcher(target_path: str) -> str:
     )
 
 
-def write_launcher(target_path: str, bin_dir: Path | None = None) -> tuple[Path, str]:
+def write_launcher(import_root: str, bin_dir: Path | None = None) -> tuple[Path, str]:
     """Install the resilient launcher to ``bin_dir`` (default ~/.local/bin).
+
+    ``import_root`` is the directory that must be on PYTHONPATH for
+    ``python3 -m py_trkpac`` to work — i.e. the parent of the running
+    ``py_trkpac`` package.
 
     Returns (path, status) where status is one of:
       - "unchanged": an identical managed launcher already existed
@@ -132,7 +138,7 @@ def write_launcher(target_path: str, bin_dir: Path | None = None) -> tuple[Path,
     bin_dir.mkdir(parents=True, exist_ok=True)
 
     launcher_path = bin_dir / "py-trkpac"
-    content = _build_launcher(target_path)
+    content = _build_launcher(import_root)
 
     status = "written"
     if launcher_path.exists():

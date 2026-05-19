@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "py-trkpac"
-version = "0.4.0"
+version = "0.4.1"
 description = "Global Python package manager with SQLite tracking"
 readme = "README.md"
 license = "MIT"

@@ -19,42 +19,56 @@ You still use venvs for project-specific needs. py-trkpac handles the rest.
 
 ## Install
 
-Requires Python 3.13+. No external dependencies — uses only Python stdlib.
+Requires Python 3.13+ (works on 3.14). No external dependencies — pure Python stdlib. Linux.
 
-### From PyPI
+### Recommended: standalone installer
+
+One command. Installs py-trkpac into a fixed, Python-version-independent location **outside** the directory it manages, with a launcher on your `PATH`. No pip-into-system, no PEP 668 (`externally-managed-environment`) fight, no chicken/egg, and it **survives Python minor-version upgrades** (e.g. 3.13 → 3.14) because py-trkpac is pure stdlib.
 
 ```bash
-pip install py-trkpac
+curl -fsSL https://raw.githubusercontent.com/aryanduntley/py-trkpac/main/install.sh | bash
 py-trkpac init
 ```
 
-### From PyPI (venv bootstrap)
-
-On systems with PEP 668 (`externally-managed-environment`), use a temporary venv to bootstrap py-trkpac into its own managed directory:
-
-```bash
-# Create a temporary venv and install py-trkpac
-python3 -m venv /tmp/trkpac-bootstrap
-/tmp/trkpac-bootstrap/bin/pip install py-trkpac
-
-# Initialize (sets up target directory, DB, and shell config)
-/tmp/trkpac-bootstrap/bin/py-trkpac init
-
-# Install py-trkpac into its own managed directory
-/tmp/trkpac-bootstrap/bin/py-trkpac install py-trkpac
-
-# Open a new terminal — py-trkpac is now on your PATH via the managed directory
-# You can safely remove the bootstrap venv
-rm -rf /tmp/trkpac-bootstrap
-```
-
-### From source (development)
+Or from a clone (offline / inspect first):
 
 ```bash
 git clone https://github.com/aryanduntley/py-trkpac.git
-ln -s /path/to/py-trkpac/py-trkpac ~/.local/bin/py-trkpac
+cd py-trkpac && ./install.sh
 py-trkpac init
 ```
+
+Installs the package to `~/.local/share/py-trkpac/` and a launcher at `~/.local/bin/py-trkpac` (override with `PY_TRKPAC_HOME` / `PY_TRKPAC_BIN`; the installer warns if `~/.local/bin` is not on your `PATH`). Remove it any time with `./uninstall.sh` — it never touches your managed packages or shell config.
+
+### From source (for development)
+
+For hacking on py-trkpac itself — runs straight from `src/`, so edits are live, and it is equally upgrade-proof:
+
+```bash
+git clone https://github.com/aryanduntley/py-trkpac.git
+ln -s "$PWD/py-trkpac/py-trkpac" ~/.local/bin/py-trkpac
+py-trkpac init
+```
+
+### Alternatives (pip)
+
+These work but are **not upgrade-durable on their own** — a Python minor-version upgrade orphans a version-pinned `pip` install. Prefer the standalone installer above.
+
+- **pipx** (isolated, PEP 668-friendly): `pipx install py-trkpac && py-trkpac init`. Run `pipx reinstall-all` after a Python upgrade.
+- **pip --user**: Debian/Ubuntu enforce PEP 668, so this needs `--break-system-packages`:
+  `pip install --user --break-system-packages py-trkpac && py-trkpac init`.
+  `init` writes the resilient launcher, but the package still sits in a version-pinned `site-packages` — reinstall (or switch to the standalone installer) after a Python upgrade.
+- **venv bootstrap → self-install into the managed dir** (pip-only, no git, upgrade-proof — but py-trkpac then lives *inside* the directory it manages):
+
+  ```bash
+  python3 -m venv /tmp/trkpac-bootstrap
+  /tmp/trkpac-bootstrap/bin/pip install py-trkpac
+  /tmp/trkpac-bootstrap/bin/py-trkpac init
+  /tmp/trkpac-bootstrap/bin/py-trkpac install py-trkpac
+  rm -rf /tmp/trkpac-bootstrap   # py-trkpac is now on PATH via the managed dir
+  ```
+
+After any install, if a later OS upgrade changes your Python minor version, see [Surviving Python upgrades](#surviving-python-upgrades) — `py-trkpac rebuild` reinstalls your managed packages for the new interpreter.
 
 ## Usage
 
@@ -188,15 +202,18 @@ cryptic failure:
 - **It fixes it in one command.** `py-trkpac rebuild` reinstalls everything
   for the current Python and prunes the dead binaries.
 - **The tool itself never breaks.** py-trkpac is pure standard library, so
-  it has no compiled parts to invalidate. `py-trkpac init` installs a
-  launcher that delegates to whatever `python3` is current (rather than
-  pip's version-pinned `console_scripts` stub). Combined with
-  self-installing py-trkpac into its own managed directory
-  (`py-trkpac install py-trkpac`), the CLI keeps working across upgrades
-  with zero intervention — only the *managed packages* need a `rebuild`.
+  it has no compiled parts to invalidate. The standalone installer (and
+  `py-trkpac init`) write a launcher that delegates to whatever `python3`
+  is current and points at wherever py-trkpac lives — never pip's
+  version-pinned `console_scripts` stub. So the CLI keeps working across
+  upgrades with zero intervention; only the *managed packages* need a
+  `rebuild`.
 
-> Tip: install py-trkpac into its own managed directory so it benefits from
-> the resilient launcher. The PyPI bootstrap recipe above already does this.
+> Tip: use the standalone installer (`install.sh`) — it places py-trkpac
+> outside the managed directory in a version-independent location, so the
+> CLI is upgrade-proof without living inside the folder it manages. A
+> version-pinned `pip --user` install is the one setup that does *not*
+> survive a Python upgrade; reinstall or switch installers if you used it.
 
 ## How it works
 
@@ -240,7 +257,9 @@ Since `pip uninstall` doesn't work with `--target` installs, py-trkpac handles r
 
 ```
 py-trkpac/
-├── py-trkpac                 # shell script entry point
+├── install.sh                # standalone installer (recommended)
+├── uninstall.sh              # reverses install.sh
+├── py-trkpac                 # shell script entry point (dev/source use)
 ├── src/
 │   └── py_trkpac/
 │       ├── __init__.py       # version
