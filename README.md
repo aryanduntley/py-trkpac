@@ -147,12 +147,56 @@ py-trkpac update           # update all explicit packages
 py-trkpac update requests  # update a specific package
 ```
 
+### Rebuild after a Python upgrade
+
+```bash
+py-trkpac rebuild
+```
+
+Reinstalls every tracked package — explicit **and** local — for the Python
+interpreter you are running now. Use this after an OS upgrade bumps your
+system Python to a new minor version (e.g. 3.13 → 3.14). It prunes the
+stale, ABI-incompatible compiled extensions, reinstalls explicit packages
+(pip re-resolves their dependencies), and reinstalls local packages from
+their tracked source paths.
+
 ### View/change config
 
 ```bash
 py-trkpac config
 py-trkpac config set target_path /new/path
 ```
+
+## Surviving Python upgrades
+
+A Python **minor**-version upgrade (3.13 → 3.14) is the one event that can
+break a global package directory. Compiled (C-extension) packages — numpy,
+cryptography, pydantic-core, lxml, etc. — ship `.so` files locked to the
+exact CPython minor version they were built for. When your OS replaces the
+interpreter, every one of them stops importing. This is fundamental to
+CPython and affects pip, venv, pipx, and conda equally; the only real fix
+is to reinstall them for the new interpreter.
+
+py-trkpac is built to make this a known, one-command recovery rather than a
+cryptic failure:
+
+- **It tells you.** py-trkpac records the Python version your packages were
+  installed under. If you run any command under a different interpreter, it
+  prints a prominent warning naming the old and new versions and pointing
+  you at the fix. (Databases created before this feature are detected
+  automatically by inspecting installed binaries.)
+- **It fixes it in one command.** `py-trkpac rebuild` reinstalls everything
+  for the current Python and prunes the dead binaries.
+- **The tool itself never breaks.** py-trkpac is pure standard library, so
+  it has no compiled parts to invalidate. `py-trkpac init` installs a
+  launcher that delegates to whatever `python3` is current (rather than
+  pip's version-pinned `console_scripts` stub). Combined with
+  self-installing py-trkpac into its own managed directory
+  (`py-trkpac install py-trkpac`), the CLI keeps working across upgrades
+  with zero intervention — only the *managed packages* need a `rebuild`.
+
+> Tip: install py-trkpac into its own managed directory so it benefits from
+> the resilient launcher. The PyPI bootstrap recipe above already does this.
 
 ## How it works
 
@@ -203,8 +247,9 @@ py-trkpac/
 │       ├── __main__.py       # python -m py_trkpac
 │       ├── cli.py            # argparse, command dispatch
 │       ├── db.py             # SQLite schema and operations
-│       ├── installer.py      # pip wrapper, metadata parsing
-│       ├── shell.py          # .bashrc management
+│       ├── installer.py      # pip wrapper, metadata parsing, rebuild
+│       ├── shell.py          # .bashrc management + resilient launcher
+│       ├── health.py         # Python-version tracking, upgrade warning
 │       └── utils.py          # name normalization, prompts
 ├── shell_configs/            # future OS support stubs
 │   ├── bashrc.py

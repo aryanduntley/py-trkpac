@@ -8,8 +8,9 @@ from pathlib import Path
 
 from py_trkpac import __version__
 from py_trkpac.db import open_db, init_db, find_db
-from py_trkpac.installer import do_install, do_remove, do_update
-from py_trkpac.shell import add_to_shell, update_shell
+from py_trkpac.health import check_python_version
+from py_trkpac.installer import do_install, do_remove, do_update, do_rebuild
+from py_trkpac.shell import add_to_shell, update_shell, write_launcher
 from py_trkpac.utils import info, error, print_table, confirm
 
 
@@ -85,6 +86,27 @@ def cmd_init(args: argparse.Namespace) -> int:
         info(f"Updated {shell_config} with PATH and PYTHONPATH entries.")
     else:
         info(f"{shell_config} already has py-trkpac entries.")
+
+    # Install the resilient launcher. pip's generated console-script pins a
+    # hard `#!/usr/bin/python3.X` shebang that dangles when the OS upgrades
+    # Python; this launcher delegates to whatever python3 is current.
+    if not args.no_launcher:
+        launcher_path, status = write_launcher(str(target_path))
+        if status == "unchanged":
+            info(f"Launcher already current: {launcher_path}")
+        elif status == "replaced":
+            info(
+                f"Replaced launcher at {launcher_path} "
+                f"(backup: {launcher_path}.py-trkpac-backup) — "
+                f"now Python-upgrade resilient."
+            )
+        else:
+            info(f"Installed Python-upgrade-resilient launcher: {launcher_path}")
+        info(
+            "Note: ensure py-trkpac is installed into the managed directory "
+            "(`py-trkpac install py-trkpac`) so the launcher keeps working "
+            "across Python upgrades."
+        )
 
     db.close()
     info("\npy-trkpac initialized. Open a new terminal for PATH changes to take effect.")
@@ -204,6 +226,16 @@ def cmd_update(args: argparse.Namespace) -> int:
     return 0 if success else 1
 
 
+def cmd_rebuild(args: argparse.Namespace) -> int:
+    """Reinstall all tracked packages for the current Python interpreter."""
+    db = open_db()
+    target_path = Path(db.get_config("target_path"))
+
+    success = do_rebuild(db, target_path)
+    db.close()
+    return 0 if success else 1
+
+
 def cmd_config(args: argparse.Namespace) -> int:
     """Show or modify configuration."""
     db = open_db()
@@ -282,6 +314,11 @@ def main() -> None:
     p_init.add_argument("--target", help="Target directory for packages")
     p_init.add_argument("--shell-config", help="Path to shell config file (default: ~/.bashrc)")
     p_init.add_argument("--force", action="store_true", help="Reinitialize even if DB exists")
+    p_init.add_argument(
+        "--no-launcher",
+        action="store_true",
+        help="Do not (re)write the ~/.local/bin/py-trkpac launcher",
+    )
 
     # install
     p_install = subparsers.add_parser("install", help="Install packages")
@@ -302,6 +339,12 @@ def main() -> None:
     p_update = subparsers.add_parser("update", help="Update packages")
     p_update.add_argument("packages", nargs="*", help="Package names (omit for all explicit)")
 
+    # rebuild
+    subparsers.add_parser(
+        "rebuild",
+        help="Reinstall all packages for the current Python (after a Python upgrade)",
+    )
+
     # config
     p_config = subparsers.add_parser("config", help="Show or modify configuration")
     p_config.add_argument("action", nargs="?", help="'set' to modify a config value")
@@ -314,6 +357,17 @@ def main() -> None:
         parser.print_help()
         sys.exit(0)
 
+    # Warn early (before command output) if the interpreter changed since
+    # packages were installed. Best-effort: a missing/locked DB just means
+    # the command itself will report the real problem.
+    if args.command != "init":
+        try:
+            _db = open_db()
+            check_python_version(_db)
+            _db.close()
+        except Exception:
+            pass
+
     dispatch = {
         "init": cmd_init,
         "install": cmd_install,
@@ -321,6 +375,7 @@ def main() -> None:
         "list": cmd_list,
         "list-deps": cmd_list_deps,
         "update": cmd_update,
+        "rebuild": cmd_rebuild,
         "config": cmd_config,
     }
 

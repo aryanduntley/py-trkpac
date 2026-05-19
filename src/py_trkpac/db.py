@@ -245,4 +245,7 @@ def init_db(target_path: Path, shell_config: Path) -> Database:
     db.init_schema()
     db.set_config("target_path", str(target_path))
     db.set_config("shell_config", str(shell_config))
+    # Record the interpreter so a later Python upgrade is detectable.
+    from py_trkpac.health import current_python_version
+    db.set_config("python_version", current_python_version())
     return db

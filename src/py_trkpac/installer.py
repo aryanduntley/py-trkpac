@@ -9,6 +9,7 @@ import tomllib
 from pathlib import Path
 
 from py_trkpac.db import Database
+from py_trkpac.health import prune_foreign_abi, record_python_version
 from py_trkpac.utils import normalize_name, info, error
 
 
@@ -394,6 +395,9 @@ def do_install(
         error("pip install failed. Database not modified.")
         return False
 
+    # pip succeeded: the environment now matches the running interpreter.
+    record_python_version(db)
+
     # Snapshot after and diff
     after = snapshot_dist_infos(target_path)
     changed = diff_dist_infos(before, after)
@@ -598,3 +602,83 @@ def do_update(db: Database, packages: list[str] | None, target_path: Path) -> bo
     # Delegate to do_install with _from_update flag so it skips its own
     # per-package prompts and final proceed confirm.
     return do_install(db, to_update, target_path, _from_update=True)
+
+
+def do_rebuild(db: Database, target_path: Path) -> bool:
+    """Reinstall every tracked package for the current Python interpreter.
+
+    This is the documented fix after a Python minor-version upgrade
+    (e.g. 3.13 -> 3.14) makes compiled packages unloadable. Unlike
+    `do_update` it also reinstalls local packages from their tracked
+    source paths and prunes binaries built for the old ABI.
+    """
+    from py_trkpac.utils import confirm
+    from py_trkpac.health import current_python_version
+
+    all_pkgs = db.get_all_packages()
+    explicit = [
+        p["display_name"]
+        for p in all_pkgs
+        if p["is_explicit"] and not p["is_local"]
+    ]
+    locals_ = [
+        (p["display_name"], p["source_path"])
+        for p in all_pkgs
+        if p["is_local"]
+    ]
+
+    if not explicit and not locals_:
+        info("No packages to rebuild.")
+        record_python_version(db)
+        return True
+
+    current = current_python_version()
+    info(f"\nRebuild for Python {current}:")
+    if explicit:
+        info(f"  {len(explicit)} explicit package(s) (dependencies resolved by pip)")
+    if locals_:
+        info(f"  {len(locals_)} local package(s) (reinstalled from source path)")
+    info("\nForeign-ABI binaries will be pruned and packages reinstalled.")
+    if not confirm("Proceed?"):
+        info("Cancelled.")
+        return True
+
+    pruned = prune_foreign_abi(target_path)
+    if pruned:
+        info(f"Pruned {pruned} extension file(s) built for a different Python.")
+
+    ok = True
+
+    if explicit:
+        info(f"\n-- Reinstalling {len(explicit)} explicit package(s) --")
+        if not do_install(db, explicit, target_path, _from_update=True):
+            error("Explicit package rebuild failed.")
+            ok = False
+
+    for name, source_path in locals_:
+        info(f"\n-- Reinstalling local package: {name} --")
+        if not source_path or not Path(source_path).expanduser().is_dir():
+            error(
+                f"Source path for {name} is missing "
+                f"({source_path!r}); skipping. Reinstall it manually with: "
+                f"py-trkpac install /path/to/{name}"
+            )
+            ok = False
+            continue
+        if not do_install(db, [source_path], target_path, _from_update=True):
+            error(f"Rebuild of local package {name} failed.")
+            ok = False
+
+    # Stamp the interpreter even if some locals were skipped: the bulk of
+    # the environment now matches, and the warning should not nag forever
+    # for a single unrecoverable local source path.
+    record_python_version(db)
+
+    if ok:
+        info(f"\nRebuild complete. Packages now target Python {current}.")
+    else:
+        info(
+            f"\nRebuild finished with some failures (see above). "
+            f"Recorded Python {current}; rerun after fixing the issues."
+        )
+    return ok
